@@ -1,6 +1,10 @@
-# InnoDB Locking
+## 14.5 InnoDB Locking and Transaction Model
 
-## Shared and Exclusive Locks(共享和独占锁定)
+要实现大规模，繁忙或高度可靠的数据库应用程序，移植来自不同数据库系统的实际代码，或调整MySQL性能，了解InnoDB锁定和InnoDB事务模型非常重要。
+
+### 14.5.1 InnoDB Locking
+
+#### Shared and Exclusive Locks(共享和独占锁定)
 
 InnoDB在有两种类型的锁，共享（S）锁和独占（X）锁的情况下实现标准行级锁定。
 
@@ -14,9 +18,9 @@ InnoDB在有两种类型的锁，共享（S）锁和独占（X）锁的情况下
 
 如果一个事务T1在行r上保存一个排它（X）锁，那么不能立即授予来自某个不同事务T2的对r上任一类型的锁的请求。 相反，事务T2必须等待事务T1释放其在行r上的锁定。
 
-## Intention Locks (意图锁定)
+#### Intention Locks (意图锁定)
 
-InnoDB支持多粒度锁定，允许在整个表上共存行级锁和锁。 为了实现多个粒度级别的锁定，使用额外类型的锁，称为意向锁。 意图锁是InnoDB中的表级锁，用于指示该表中某一行的事务需要哪种类型的锁（共享或排除）。 在InnoDB中使用意向锁有两种类型（假设事务T已经在表t上请求指定类型的锁）：
+InnoDB支持多粒度锁定，允许在整个表上共存行级锁和锁。 为了实现多个粒度级别的锁定，使用额外类型的锁，称为意图锁。 意图锁是InnoDB中的表级锁，用于指示该表中某一行的事务需要哪种类型的锁（共享或排除）。 在InnoDB中使用意向锁有两种类型（假设事务T已经在表t上请求指定类型的锁）：
 
 - Intention share 意图共享（IS）：事务T意图在表t中的单个行上设置S锁。
 - Intention exclusive 意图排他（IX）：事务T意图在这些行上设置X锁。
@@ -30,12 +34,12 @@ InnoDB支持多粒度锁定，允许在整个表上共存行级锁和锁。 为�
 
 这些规则可以通过下面的锁类型兼容性矩阵方便地总结。
 
-|      | *X*      | *IX*       | *S*        | *IS*       |
-| ---- | -------- | ---------- | ---------- | ---------- |
-| *X*  | Conflict | Conflict   | Conflict   | Conflict   |
-| *IX* | Conflict | Compatible | Conflict   | Compatible |
-| *S*  | Conflict | Conflict   | Compatible | Compatible |
-| *IS* | Conflict | Compatible | Compatible | Compatible |
+|      | *X*  | *IX* | *S*  | *IS* |
+| ---- | ---- | ---- | ---- | ---- |
+| *X*  | 冲突   | 冲突   | 冲突   | 冲突   |
+| *IX* | 冲突   | 兼容   | 冲突   | 兼容   |
+| *S*  | 冲突   | 冲突   | 兼容   | 兼容   |
+| *IS* | 冲突   | 兼容   | 兼容   | 兼容   |
 
 如果请求事务与现有的锁定兼容，则授予锁定，但如果与现有的锁定冲突，则该锁定不会被授予。 事务一直等到冲突的现有锁被释放。 如果锁定请求与现有的锁定发生冲突，并且由于会导致死锁而无法被授予，则会发生错误。
 
@@ -47,7 +51,7 @@ InnoDB支持多粒度锁定，允许在整个表上共存行级锁和锁。 为�
 TABLE LOCK table `test`.`t` trx id 10080 lock mode IX
 ```
 
-## Record Locks (记录锁定)
+#### Record Locks (记录锁定)
 
 记录锁是索引记录上的锁。 例如，SELECT c1 FROM t WHERE c1 = 10 FOR UPDATE; 防止任何其他事务插入，更新或删除t.c1的值为10的行。
 
@@ -64,11 +68,11 @@ Record lock, heap no 2 PHYSICAL RECORD: n_fields 3; compact format; info bits 0
  2: len 7; hex b60000019d0110; asc        ;;
 ```
 
-## Gap Locks(间隙锁)
+#### Gap Locks(间隙锁)
 
 间隙锁定是索引记录之间的间隙的锁定，也可以是最后一个索引记录之前或之后间隙的锁定。 例如，SELECT c1 FROM t WHERE c1 BETWEEN 10 and 20 FOR UPDATE; 防止其他事务向列t.c1中插入15的值，无论该列中是否已经有任何这样的值，因为该范围内的所有现有值之间的间隙被锁定。
 
-缺口可能跨越单个索引值，多个索引值，甚至是空的。
+间隙可能跨越单个索引值，多个索引值，甚至是空的。
 
 间隙锁是性能和并发性之间的折衷的一部分，在某些事务隔离级别中使用，而不是在其他级别中使用。
 
@@ -78,17 +82,17 @@ Record lock, heap no 2 PHYSICAL RECORD: n_fields 3; compact format; info bits 0
 SELECT * FROM child WHERE id = 100;	
 ```
 
-如果id没有编入索引或者有一个不唯一的索引，那么语句确实会锁定前面的差距。
+如果id没有编入索引或者有一个不唯一的索引，那么语句确实会锁定前面的间隙。
 
-这里也值得注意的是，不同的交易可以在差距上保持冲突的锁定。 例如，事务A可以在间隙上保持共享的间隙锁（间隙S锁），而事务B在同一间隙上保持独占间隙锁（间隙X锁）。 允许冲突间隙锁定的原因是，如果从索引中清除记录，则必须合并由不同事务记录保持的间隙锁定。
+这里也值得注意的是，不同的事务可以在间隙上保持冲突的锁定。 例如，事务A可以在间隙上保持共享的间隙锁（间隙S锁），而事务B在同一间隙上保持独占间隙锁（间隙X锁）。 允许冲突间隙锁定的原因是，如果从索引中清除记录，则必须合并由不同事务记录保持的间隙锁定。
 
-InnoDB中的缺口锁是“纯粹的抑制性”，这意味着它们只能阻止其他事务插入到缺口中。 它们并不妨碍不同的交易在同样的差距上进行差距锁定。 因此，间隙X锁具有与间隙S锁相同的效果。
+**InnoDB中的间隙锁是“纯粹的抑制性”，这意味着它们只能阻止其他事务插入到间隙中。 它们并不妨碍不同的事务在同样的间隙上进行间隙锁定。 因此，间隙X锁具有与间隙S锁相同的效果。**
 
 可以显式禁用间隙锁定。 如果将事务隔离级别更改为READ COMMITTED或启用innodb_locks_unsafe_for_binlog系统变量（现在已弃用），则会发生这种情况。 在这种情况下，对于搜索和索引扫描禁用间隙锁定，仅用于外键约束检查和重复键检查。
 
 还有使用READ COMMITTED隔离级别或启用innodb_locks_unsafe_for_binlog的其他效果。 在MySQL评估WHERE条件之后，释放对不匹配行的记录锁定。 对于UPDATE语句，InnoDB执行“半连续”读取，以便将最新的提交版本返回给MySQL，以便MySQL可以确定该行是否匹配UPDATE的WHERE条件。
 
-## Next-Key锁
+#### Next-Key锁
 
 下一个键锁是索引记录上的记录锁与索引记录之前的间隙上的间隙锁的组合。
 
@@ -106,7 +110,7 @@ InnoDB以这样一种方式执行行级锁定，即当它搜索或扫描表索�
 
 对于最后一个时间间隔，下一个键锁定将索引中的最大值之上的间隙锁定，并且“上游”伪记录的值高于实际在索引中的任何值。 上确界不是真实的索引记录，所以实际上，这个下一个键锁只锁定了跟随最大索引值的间隙。
 
-默认情况下，InnoDB以REPEATABLE READ事务隔离级别运行。 在这种情况下，InnoDB使用next-key锁进行搜索和索引扫描，防止幻像行（请参阅第14.5.4节“幻像行”）。
+**默认情况下，InnoDB以REPEATABLE READ事务隔离级别运行。 在这种情况下，InnoDB使用next-key锁进行搜索和索引扫描，防止幻像行（请参阅第14.5.4节“幻像行”）。**
 
 下一个键锁定的事务数据在SHOW ENGINE INNODB STATUS和InnoDB监视器输出中出现类似于以下内容：
 
@@ -122,7 +126,7 @@ Record lock, heap no 2 PHYSICAL RECORD: n_fields 3; compact format; info bits 0
  2: len 7; hex b60000019d0110; asc        ;;	
 ```
 
-## Insert Intention Locks(插入意向锁)
+#### Insert Intention Locks(插入意向锁)
 
 插入意图锁定是插入行之前由INSERT操作设置的一种间隙锁定。 这个锁定以插入到同一索引间隙中的多个事务如果没有插入间隙中的相同位置时不需要等待对方的方式表示插入的意图。 假设有索引记录的值为4和7.分别尝试插入5和6的值的事务分别在获得对插入行的排它锁之前用插入意向锁来锁定4和7之间的间隔， 但不要相互阻塞，因为行是非冲突的。
 
@@ -161,15 +165,15 @@ Record lock, heap no 3 PHYSICAL RECORD: n_fields 3; compact format; info bits 0
  2: len 7; hex 9000000172011c; asc     r  ;;...
 ```
 
-## AUTO-INC Locks
+#### AUTO-INC Locks
 
 AUTO-INC锁是一个特殊的表级锁，通过将事务插入带AUTO_INCREMENT列的表中。 在最简单的情况下，如果一个事务正在向表中插入值，则任何其他事务都必须等待自己插入到该表中，以便第一个事务插入的行接收连续的主键值。
 
-innodb_autoinc_lock_mode配置选项控制用于自动增量锁定的算法。 它允许您选择如何在可预测的自动增量值序列和插入操作的最大并发之间进行权衡。
+**innodb_autoinc_lock_mode配置选项控制用于自动增量锁定的算法。 它允许您选择如何在可预测的自动增量值序列和插入操作的最大并发之间进行权衡。**
 
-有关更多信息，请参见第14.8.1.5节“InnoDB中的AUTO_INCREMENT处理”。
+**有关更多信息，请参见第14.8.1.5节“InnoDB中的AUTO_INCREMENT处理”。**
 
-## Predicate Locks for Spatial Indexes 谓词锁定空间索引
+#### Predicate Locks for Spatial Indexes 谓词锁定空间索引
 
 InnoDB支持包含空间列的列的SPATIAL索引（参见第11.5.8节“优化空间分析”）。
 
@@ -177,13 +181,15 @@ InnoDB支持包含空间列的列的SPATIAL索引（参见第11.5.8节“优化�
 
 为了支持具有SPATIAL索引的表的隔离级别，InnoDB使用谓词锁。 SPATIAL索引包含最小边界矩形（MBR）值，因此InnoDB通过对用于查询的MBR值设置谓词锁定来强制执行对索引的一致读取。 其他事务不能插入或修改匹配查询条件的行。
 
-# InnoDB Transaction Model
+### 14.5.2 InnoDB Transaction Model
 
-## 事务隔离级别
+在InnoDB事务模型中，目标是将多版本数据库的最佳属性与传统的两阶段锁定相结合。 InnoDB在行级别执行锁定，默认情况下按Oracle的风格运行查询作为非锁定一致读取。 InnoDB中的锁定信息以节省空间的方式进行存储，因此不需要锁定升级。 通常，允许多个用户锁定InnoDB表中的每一行，或者任意行的任意子集，而不会导致InnoDB内存耗尽。
+
+#### 14.5.2.1 Transaction Isolation Levels 事务隔离级别	
 
 事务隔离是数据库处理的基础之一。 隔离是I中的首字母ACID; 隔离级别是在多个事务同时进行更改和执行查询时，对结果的性能和可靠性，一致性和可重复性之间的平衡进行微调的设置。
 
-InnoDB提供了SQL：1992标准描述的所有四个事务隔离级别：READ UNCOMMITTED，READ COMMITTED，REPEATABLE READ和SERIALIZABLE。 InnoDB的默认隔离级别是REPEATABLE READ。
+**InnoDB提供了SQL：1992标准描述的所有四个事务隔离级别：READ UNCOMMITTED，READ COMMITTED，REPEATABLE READ和SERIALIZABLE。 InnoDB的默认隔离级别是REPEATABLE READ。**
 
 用户可以使用SET TRANSACTION语句更改单个会话或所有后续连接的隔离级别。 要为所有连接设置服务器的默认隔离级别，请在命令行或选项文件中使用--transaction-isolation选项。 有关隔离级别和级别设置语法的详细信息，请参见第13.3.6节“SET TRANSACTION语法”。
 
@@ -193,7 +199,7 @@ InnoDB使用不同的锁定策略支持这里描述的每个事务隔离级别�
 
 - REPEATABLE READ
 
-  这是InnoDB的默认隔离级别。 在同一事务中的一致读取读取由第一次读取建立的快照。这意味着如果在同一个事务中发出几个纯的（非锁定的）SELECT语句，这些SELECT语句也是相互一致的。 请参见第14.5.2.3节“一致性非锁定读取”。
+  这是InnoDB的默认隔离级别。 在同一事务中的一致读取，读取由第一次读取建立的快照。这意味着如果在同一个事务中发出几个纯的（非锁定的）SELECT语句，这些SELECT语句也是相互一致的。 请参见第14.5.2.3节“一致性非锁定读取”。
 
   对于锁定读取（SELECT FOR WITH UPDATE或LOCK IN SHARE MODE），UPDATE和DELETE语句，锁定取决于语句是使用具有唯一搜索条件的唯一索引还是范围类型搜索条件。
 
@@ -291,6 +297,12 @@ InnoDB使用不同的锁定策略支持这里描述的每个事务隔离级别�
 - SERIALIZABLE
 
   这个级别就像REPEATABLE READ，但是InnoDB隐式地将所有普通的SELECT语句转换成SELECT ... LOCK IN SHARE MODE，如果autocommit被禁用的话。 如果启用自动提交，则SELECT是它自己的事务。 因此，它被认为是只读的，并且如果作为一致的（非锁定的）读取来执行，则可以被序列化，并且不需要阻塞其他事务。 （如果其他事务已经修改了所选的行，强制一个普通的SELECT阻塞，请禁用自动提交。
+
+#### 14.5.2.2 autocommit, Commit, and Rollback
+
+在InnoDB中，所有的用户活动都发生在一个事务中。 如果启用自动提交模式，则每个SQL语句将自行形成单个事务。 默认情况下，MySQL为启用自动提交的每个新连接启动会话，所以如果该语句没有返回错误，则MySQL会在每个SQL语句之后进行提交。 如果语句返回错误，则提交或回滚行为取决于错误。 参见14.21.4节，“InnoDB错误处理”。
+
+
 
 Locking Reads(锁定读取)
 
