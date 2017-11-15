@@ -302,6 +302,138 @@ InnoDB使用不同的锁定策略支持这里描述的每个事务隔离级别�
 
 在InnoDB中，所有的用户活动都发生在一个事务中。 如果启用自动提交模式，则每个SQL语句将自行形成单个事务。 默认情况下，MySQL为启用自动提交的每个新连接启动会话，所以如果该语句没有返回错误，则MySQL会在每个SQL语句之后进行提交。 如果语句返回错误，则提交或回滚行为取决于错误。 参见14.21.4节，“InnoDB错误处理”。
 
+启用了自动提交的会话可以通过以明确的START TRANSACTION或BEGIN语句启动并以COMMIT或ROLLBACK语句结束来执行多语句事务。请参见第13.3.1节“START TRANSACTION，COMMIT和ROLLBACK语法”。
+
+如果在SET autocommit = 0的会话中禁用自动提交模式，则会话始终打开一个事务。 COMMIT或ROLLBACK语句结束当前事务，并启动一个新事务。
+
+如果具有禁用自动提交功能的会话在未显式提交最终事务的情况下结束，则MySQL会回滚该事务。
+
+一些语句隐式地结束一个事务，就像在执行语句之前执行了一个COMMIT一样。有关细节，请参见第13.3.3节“导致隐式提交的语句”。
+
+COMMIT意味着在当前交易中所做的更改是永久性的，并对其他会话可见。另一方面，ROLLBACK语句会取消当前事务所做的所有修改。 COMMIT和ROLLBACK都释放在当前事务中设置的所有InnoDB锁。
+
+##### Grouping DML Operations with Transactions (用事务对DML操作进行分组)
+
+默认情况下，与MySQL服务器的连接从启用自动提交模式开始，在执行时自动提交每个SQL语句。 如果您对其他数据库系统有经验，则可能不太熟悉这种操作模式，在这种模式下，发出一系列DML语句并提交或一起回滚它们是标准做法。
+
+要使用多语句事务，请使用SQL语句SET autocommit = 0关闭自动提交，并根据需要使用COMMIT或ROLLBACK结束每个事务。 要使自动提交功能开启，请使用START TRANSACTION开始每个事务，并使用COMMIT或ROLLBACK结束。 以下示例显示了两个事务。 第一个提交; 第二个回滚。
+
+```mysql
+shell> mysql test
+
+mysql> CREATE TABLE customer (a INT, b CHAR (20), INDEX (a));
+Query OK, 0 rows affected (0.00 sec)
+mysql> -- Do a transaction with autocommit turned on.
+mysql> START TRANSACTION;
+Query OK, 0 rows affected (0.00 sec)
+mysql> INSERT INTO customer VALUES (10, 'Heikki');
+Query OK, 1 row affected (0.00 sec)
+mysql> COMMIT;
+Query OK, 0 rows affected (0.00 sec)
+mysql> -- Do another transaction with autocommit turned off.
+mysql> SET autocommit=0;
+Query OK, 0 rows affected (0.00 sec)
+mysql> INSERT INTO customer VALUES (15, 'John');
+Query OK, 1 row affected (0.00 sec)
+mysql> INSERT INTO customer VALUES (20, 'Paul');
+Query OK, 1 row affected (0.00 sec)
+mysql> DELETE FROM customer WHERE b = 'Heikki';
+Query OK, 1 row affected (0.00 sec)
+mysql> -- Now we undo those last 2 inserts and the delete.
+mysql> ROLLBACK;
+Query OK, 0 rows affected (0.00 sec)
+mysql> SELECT * FROM customer;
++------+--------+
+| a    | b      |
++------+--------+
+|   10 | Heikki |
++------+--------+
+1 row in set (0.00 sec)
+mysql>
+```
+
+客户端语言中的事务
+
+在诸如PHP，Perl DBI，JDBC，ODBC或MySQL的标准C调用接口之类的API中，您可以将事务控制语句（如COMMIT）作为字符串发送到MySQL服务器，就像任何其他SQL语句（如SELECT或INSERT）。 一些API还提供单独的特殊事务提交和回滚函数或方法。
+
+#### 14.5.2.3 Consistent Nonlocking Reads (一致的非锁定读取)
+
+一致的读取意味着InnoDB使用多版本化在某个时间点向查询呈现数据库的快照。 该查询查看在该时间点之前提交的事务所做的更改，而不更改或未提交的事务所做的更改。 这个规则的例外是该查询查看同一个事务中的早期语句所做的更改。 此异常会导致以下异常：如果更新表中的某些行，则SELECT将看到更新行的最新版本，但也可能会看到任何行的较早版本。 如果其他会话同时更新同一个表，异常意味着您可能会看到该表处于数据库中从未存在的状态。
+
+如果事务隔离级别是REPEATABLE READ（默认级别），则在同一事务中的所有一致读取将读取由该事务中第一次读取所创建的快照。 您可以通过提交当前事务并在发出新查询之后为您的查询获得更新鲜的快照。
+
+使用READ COMMITTED隔离级别，事务中的每个一致的读取设置并读取其自己的新鲜快照。
+
+一致的读取是InnoDB在READ COMMITTED和REPEATABLE READ隔离级别处理SELECT语句的默认模式。 一致的读操作不会在它所访问的表上设置任何锁，因此其他会话可以自由修改这些表，同时在表上执行一致的读操作。
+
+假设您正在运行默认的REPEATABLE READ隔离级别。 当您发出一致的读取（即普通的SELECT语句）时，InnoDB会为您的事务提供一个时间点，根据该时间点查询数据库。 如果另一个事务删除一行并在您的时间点分配后提交，则不会将该行视为已被删除。 插入和更新被类似地处理。
+
+> **注意**
+>
+> 数据库状态的快照适用于事务中的SELECT语句，而不一定是DML语句。 如果您插入或修改某些行，然后提交该事务，则从另一个并发REPEATABLE READ事务发出的DELETE或UPDATE语句可能会影响那些刚刚提交的行，即使会话无法查询它们。 如果事务更新或删除由不同事务提交的行，则这些更改对当前事务变得可见。 例如，您可能会遇到如下情况：
+>
+> ```mysql
+> SELECT COUNT(c1) FROM t1 WHERE c1 = 'xyz';
+> -- Returns 0: no rows match.
+> DELETE FROM t1 WHERE c1 = 'xyz';
+> -- Deletes several rows recently committed by other transaction.
+>
+> SELECT COUNT(c2) FROM t1 WHERE c2 = 'abc';
+> -- Returns 0: no rows match.
+> UPDATE t1 SET c2 = 'cba' WHERE c2 = 'abc';
+> -- Affects 10 rows: another txn just committed 10 rows with 'abc' values.
+> SELECT COUNT(c2) FROM t1 WHERE c2 = 'cba';
+> -- Returns 10: this txn can now see the rows it just updated.
+> ```
+
+您可以通过提交事务来提前您的时间点，然后再进行另一个SELECT或START TRANSACTION WITH CONSISTENT SNAPSHOT。
+
+这被称为多版本并发控制。
+
+在下面的例子中，只有当B提交插入并且A已经提交时，会话A才能看到由B插入的行，以便时间点超过B的提交。
+
+```mysql
+             Session A              Session B
+
+           SET autocommit=0;      SET autocommit=0;
+time
+|          SELECT * FROM t;
+|          empty set
+|                                 INSERT INTO t VALUES (1, 2);
+|
+v          SELECT * FROM t;
+           empty set
+                                  COMMIT;
+
+           SELECT * FROM t;
+           empty set
+
+           COMMIT;
+
+           SELECT * FROM t;
+           ---------------------
+           |    1    |    2    |
+           ---------------------
+```
+
+如果要查看数据库的“最新”状态，请使用READ COMMITTED隔离级别或锁定读取：
+
+```mysql
+SELECT * FROM t LOCK IN SHARE MODE;
+```
+
+使用READ COMMITTED隔离级别，事务中的每个一致的读取设置并读取其自己的新鲜快照。 在LOCK IN SHARE MODE中，会发生锁定读取：SELECT会阻塞，直到包含最新行的事务结束（请参见第14.5.2.4节“锁定读取”）。
+
+对于某些DDL语句，一致的读取不起作用：
+
+- 一致的读操作不能在DROP TABLE上工作，因为MySQL不能使用已经被删除的表，InnoDB会破坏表。
+- 一致性读取不能在ALTER TABLE上工作，因为该语句会生成原始表的临时副本，并在构建临时副本时删除原始表。 在事务中重新发布一致的读取时，新表中的行不可见，因为在执行事务的快照时，这些行不存在。 在这种情况下，事务返回错误：ER_TABLE_DEF_CHANGED，“表定义已更改，请重试事务”。
+
+读取的类型因INSERT INTO ... SELECT，UPDATE ...（SELECT）和CREATE TABLE ... SELECT等子句中的选择而异：未指定FOR UPDATE或LOCK IN SHARE MODE中的选择：
+
+- 默认情况下，InnoDB使用更强大的锁，SELECT部分就像READ COMMITTED一样，即使在同一个事务中，每个一致的读也会设置和读取自己的新鲜快照。
+- 要在这种情况下使用一致的读取，请启用innodb_locks_unsafe_for_binlog选项，并将事务的隔离级别设置为READ UNCOMMITTED，READ COMMITTED或REPEATABLE READ（即SERIALIZABLE以外的任何其他）。 在这种情况下，从所选表中读取的行上不设置锁定。
+
 
 
 Locking Reads(锁定读取)
